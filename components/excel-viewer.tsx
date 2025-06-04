@@ -6,10 +6,13 @@ import { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { Button } from "@/components/ui/button";
 
-interface ExcelViewerProps { file: File }
+interface ExcelViewerProps {
+  file: File;
+  stpFiles?: File[];
+}
 interface SheetData { name: string; data: any[][]; headers: string[] }
 
-export function ExcelViewer({ file }: ExcelViewerProps) {
+export function ExcelViewer({ file, stpFiles = [] }: ExcelViewerProps) {
   const [sheets, setSheets] = useState<SheetData[]>([]);
   const [active, setActive] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -63,6 +66,7 @@ export function ExcelViewer({ file }: ExcelViewerProps) {
     setRaw(null);
     const fd = new FormData();
     fd.append("file", file);
+    stpFiles.forEach((f) => fd.append("stpFiles", f, f.name));
     const res = await fetch("/api/process-xlsx", { method: "POST", body: fd });
     if (!res.ok) {
       alert("服务器处理失败 – " + (await res.text()));
