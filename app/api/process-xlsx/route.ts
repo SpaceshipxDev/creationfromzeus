@@ -147,6 +147,13 @@ Look for:
 - Processing requirements
 - Any technical notes or requirements
 
+You will also receive several PNG preview images. Each image is preceded by a
+line in the prompt like `IMAGE_ID:IMG1` followed by the actual image data. Use
+these images to determine which part each preview belongs to. When creating the
+`excelLayoutData` rows and `quotationData` products, place the corresponding
+image ID (such as `IMG1`) in the `产品图片` or `零件图片` field so the
+frontend can insert the correct image.
+
 Output exactly these two variables:
 
 const excelLayoutData = [
@@ -204,14 +211,19 @@ Extract ALL data from the Excel content. Do not skip or abbreviate any informati
 Excel File Content:
 `;
 
-async function callGemini(excelText: string): Promise<string> {
+async function callGemini(excelText: string, images: { id: string; base64: string }[]): Promise<string> {
   const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY! });
+  const parts: any[] = [{ text: PROMPT + excelText }];
+  for (const img of images) {
+    parts.push({ text: `IMAGE_ID:${img.id}` });
+    parts.push({ inlineData: { mimeType: "image/png", data: img.base64 } });
+  }
   const resp = await ai.models.generateContentStream({
     model: "gemini-2.5-flash-preview-05-20",
     config: { responseMimeType: "text/plain" },
-    contents: [{ 
-      role: "user", 
-      parts: [{ text: PROMPT + excelText }] 
+    contents: [{
+      role: "user",
+      parts
     }],
   });
 
@@ -245,6 +257,8 @@ function extractStructures(txt: string): [string, string] {
 async function renderStpFiles(files: { path: string; name: string }[]): Promise<Record<string, Buffer>> {
   const map: Record<string, Buffer> = {};
   if (!PYTHON_RENDERER_URL) return map;
+  let idx = 1;
+
   for (const f of files) {
     try {
       const buf = await fs.readFile(f.path);
@@ -256,6 +270,8 @@ async function renderStpFiles(files: { path: string; name: string }[]): Promise<
       const zip = await JSZip.loadAsync(zipBuf);
       const imgName = Object.keys(zip.files).find(n => !zip.files[n].dir && /\.(png|jpe?g)$/i.test(n));
       if (imgName) {
+        const id = `IMG${idx++}`;
+        map[id] = await zip.files[imgName].async("nodebuffer");
         map[f.name] = await zip.files[imgName].async("nodebuffer");
       }
     } catch (e) {
@@ -434,17 +450,22 @@ export async function POST(req: Request) {
   try {
     // Parse Excel directly to text
     const excelText = await parseExcelToText(upPath);
-    
+
     // LOG THE PARSED CONTENT
     console.log("=== PARSED EXCEL CONTENT ===");
     console.log(excelText);
     console.log("=== END PARSED CONTENT ===");
-    
-    const rawOutput = await callGemini(excelText);
+
+    // Render STP previews and prepare images for Gemini
+    const imageMap = await renderStpFiles(stpInfo);
+    const imagesForGemini = Object.entries(imageMap).map(([id, buf]) => ({ id, base64: buf.toString('base64') }));
+
+    const rawOutput = await callGemini(excelText, imagesForGemini);
     const [arrJS, objJS] = extractStructures(rawOutput);
 
     const layout = JSON.parse(arrJS);
     const quotation = JSON.parse(objJS);
+
 
 
     // ---- Map STP filenames to parts ----
