@@ -446,6 +446,7 @@ export async function POST(req: Request) {
     const layout = JSON.parse(arrJS);
     const quotation = JSON.parse(objJS);
 
+
     // ---- Map STP filenames to parts ----
     const stpNames = stpInfo.map(f => f.name.toLowerCase());
 
@@ -466,6 +467,7 @@ export async function POST(req: Request) {
         if (match) p["零件图片"] = match;
       }
     }
+
 
     const imageMap = await renderStpFiles(stpInfo);
 
