@@ -1,0 +1,39 @@
+{
+  "name": "creationfromzeus",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@google/genai": "^1.3.0",
+    "@radix-ui/react-slot": "^1.2.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "exceljs": "^4.4.0",
+    "html2canvas": "^1.4.1",
+    "jszip": "^3.10.1",
+    "lucide-react": "^0.511.0",
+    "mime": "^4.0.7",
+    "next": "15.3.3",
+    "puppeteer": "^24.10.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "sheetjs": "^2.0.0",
+    "tailwind-merge": "^3.3.0",
+    "xlsx": "^0.18.5",
+    "xlsx2html": "^1.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4",
+    "tw-animate-css": "^1.3.3",
+    "typescript": "^5"
+  }
+}
