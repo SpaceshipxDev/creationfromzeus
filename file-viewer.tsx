@@ -135,7 +135,7 @@ export default function FileViewer() {
                 <h4 className="text-lg font-semibold mb-4 text-gray-800 dark:text-gray-200">
                   Specification Sheet: <span className="font-normal text-green-700 dark:text-green-400">{primaryExcelFile.name}</span>
                 </h4>
-                <ExcelViewer file={primaryExcelFile} />
+                <ExcelViewer file={primaryExcelFile} stpFiles={stpFileItems.map(i => i.file)} />
               </div>
             )}
             {!primaryExcelFile && allExcelFilesCount > 0 && (
