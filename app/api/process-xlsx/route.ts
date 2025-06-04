@@ -5,13 +5,18 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import ExcelJS from "exceljs";
+import JSZip from "jszip";
 import { GoogleGenAI } from "@google/genai";
 
 // ---- ENV ----
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const PYTHON_RENDERER_URL = process.env.PYTHON_RENDERER_URL;
 
 if (!GEMINI_API_KEY) {
   console.error("Required environment variable missing: GEMINI_API_KEY");
+}
+if (!PYTHON_RENDERER_URL) {
+  console.error("Required environment variable missing: PYTHON_RENDERER_URL");
 }
 
 // ---- TMP PATHS ----
@@ -236,8 +241,32 @@ function extractStructures(txt: string): [string, string] {
   return [clean(arrMatch[1]), clean(objMatch[1])];
 }
 
+// ---- STP Image Rendering ----
+async function renderStpFiles(files: { path: string; name: string }[]): Promise<Record<string, Buffer>> {
+  const map: Record<string, Buffer> = {};
+  if (!PYTHON_RENDERER_URL) return map;
+  for (const f of files) {
+    try {
+      const buf = await fs.readFile(f.path);
+      const fd = new FormData();
+      fd.append("file", new Blob([buf]), f.name);
+      const res = await fetch(PYTHON_RENDERER_URL, { method: "POST", body: fd });
+      if (!res.ok) continue;
+      const zipBuf = Buffer.from(await res.arrayBuffer());
+      const zip = await JSZip.loadAsync(zipBuf);
+      const imgName = Object.keys(zip.files).find(n => !zip.files[n].dir && /\.(png|jpe?g)$/i.test(n));
+      if (imgName) {
+        map[f.name] = await zip.files[imgName].async("nodebuffer");
+      }
+    } catch (e) {
+      console.error("Failed to render STP", f.name, e);
+    }
+  }
+  return map;
+}
+
 // ---- Excel Builders ----
-async function buildProductionOrder(layout: any[]): Promise<Buffer> {
+async function buildProductionOrder(layout: any[], images: Record<string, Buffer>): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("生产单");
   ws.columns = ["序号", "产品图片", "产品编号", "产品名称", "规格", "材料", "数量", "加工方式", "工艺要求"].map(h => ({
@@ -258,6 +287,15 @@ async function buildProductionOrder(layout: any[]): Promise<Buffer> {
       case "main_table_header_row":
       case "main_table_data_row":
         row.values = item.headers || item.data;
+        if (item.type === "main_table_data_row" && item.data[1]) {
+          const key = item.data[1];
+          const img = images[key];
+          if (img) {
+            const id = wb.addImage({ buffer: img, extension: 'png' });
+            ws.addImage(id, `B${row.number}:B${row.number}`);
+            row.height = Math.max(row.height || 18, 80);
+          }
+        }
         break;
     }
     row.height = item.height;
@@ -265,7 +303,7 @@ async function buildProductionOrder(layout: any[]): Promise<Buffer> {
   return wb.xlsx.writeBuffer();
 }
 
-async function buildQuotation(q: any): Promise<Buffer> {
+async function buildQuotation(q: any, images: Record<string, Buffer>): Promise<Buffer> {
     const workbook = new ExcelJS.Workbook();
     const ws = workbook.addWorksheet("报价单");
   
@@ -304,17 +342,24 @@ async function buildQuotation(q: any): Promise<Buffer> {
     // Products Data Rows
     q.products.forEach(product => {
       const row = ws.addRow([
-        product["序号"], 
-        product["零件图片"], 
-        product["零件名"], 
-        product["表面"], 
+        product["序号"],
+        product["零件图片"],
+        product["零件名"],
+        product["表面"],
         product["材质"],
-        product["数量"], 
+        product["数量"],
         "",
         "",
         product["备注"]
       ]);
-      row.height = 18;
+      const key = product["零件图片"] || product["零件名"];
+      if (images[key]) {
+        const id = workbook.addImage({ buffer: images[key], extension: 'png' });
+        ws.addImage(id, `B${row.number}:B${row.number}`);
+        row.height = Math.max(row.height, 80);
+      } else {
+        row.height = 18;
+      }
     });
   
     // Total Row
@@ -371,6 +416,7 @@ export async function POST(req: Request) {
 
   const fd = await req.formData();
   const file = fd.get("file") as File | null;
+  const stpUploads = fd.getAll("stpFiles") as File[];
   if (!file || !file.name.endsWith(".xlsx"))
     return NextResponse.json({ error: "Invalid file. Upload '.xlsx'." }, { status: 400 });
 
@@ -378,6 +424,12 @@ export async function POST(req: Request) {
   const upPath = path.join(UPLOAD_DIR, slug, file.name);
   await fs.mkdir(path.dirname(upPath), { recursive: true });
   await fs.writeFile(upPath, Buffer.from(await file.arrayBuffer()));
+  const stpInfo: { path: string; name: string }[] = [];
+  for (const sf of stpUploads) {
+    const p = path.join(UPLOAD_DIR, slug, sf.name);
+    await fs.writeFile(p, Buffer.from(await sf.arrayBuffer()));
+    stpInfo.push({ path: p, name: sf.name });
+  }
 
   try {
     // Parse Excel directly to text
@@ -394,8 +446,31 @@ export async function POST(req: Request) {
     const layout = JSON.parse(arrJS);
     const quotation = JSON.parse(objJS);
 
-    const prodBuf = await buildProductionOrder(layout);
-    const quoteBuf = await buildQuotation(quotation);
+    // ---- Map STP filenames to parts ----
+    const stpNames = stpInfo.map(f => f.name.toLowerCase());
+
+    // attach matching STP filename to layout rows
+    for (const item of layout) {
+      if (item.type === "main_table_data_row" && item.data && item.data.length > 2) {
+        const partNum = String(item.data[2] || "").toLowerCase();
+        const match = stpNames.find(n => n.startsWith(partNum));
+        if (match) item.data[1] = match;
+      }
+    }
+
+    // attach matching STP filename to quotation products
+    if (Array.isArray(quotation.products)) {
+      for (const p of quotation.products) {
+        const partNum = String(p["零件名"] || "").toLowerCase();
+        const match = stpNames.find(n => n.startsWith(partNum));
+        if (match) p["零件图片"] = match;
+      }
+    }
+
+    const imageMap = await renderStpFiles(stpInfo);
+
+    const prodBuf = await buildProductionOrder(layout, imageMap);
+    const quoteBuf = await buildQuotation(quotation, imageMap);
 
     return NextResponse.json({
       productionOrderBase64: Buffer.from(prodBuf).toString("base64"),
