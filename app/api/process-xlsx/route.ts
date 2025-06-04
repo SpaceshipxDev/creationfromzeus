@@ -258,6 +258,7 @@ async function renderStpFiles(files: { path: string; name: string }[]): Promise<
   const map: Record<string, Buffer> = {};
   if (!PYTHON_RENDERER_URL) return map;
   let idx = 1;
+
   for (const f of files) {
     try {
       const buf = await fs.readFile(f.path);
@@ -271,6 +272,7 @@ async function renderStpFiles(files: { path: string; name: string }[]): Promise<
       if (imgName) {
         const id = `IMG${idx++}`;
         map[id] = await zip.files[imgName].async("nodebuffer");
+        map[f.name] = await zip.files[imgName].async("nodebuffer");
       }
     } catch (e) {
       console.error("Failed to render STP", f.name, e);
@@ -463,6 +465,32 @@ export async function POST(req: Request) {
 
     const layout = JSON.parse(arrJS);
     const quotation = JSON.parse(objJS);
+
+
+
+    // ---- Map STP filenames to parts ----
+    const stpNames = stpInfo.map(f => f.name.toLowerCase());
+
+    // attach matching STP filename to layout rows
+    for (const item of layout) {
+      if (item.type === "main_table_data_row" && item.data && item.data.length > 2) {
+        const partNum = String(item.data[2] || "").toLowerCase();
+        const match = stpNames.find(n => n.startsWith(partNum));
+        if (match) item.data[1] = match;
+      }
+    }
+
+    // attach matching STP filename to quotation products
+    if (Array.isArray(quotation.products)) {
+      for (const p of quotation.products) {
+        const partNum = String(p["零件名"] || "").toLowerCase();
+        const match = stpNames.find(n => n.startsWith(partNum));
+        if (match) p["零件图片"] = match;
+      }
+    }
+
+
+    const imageMap = await renderStpFiles(stpInfo);
 
     const prodBuf = await buildProductionOrder(layout, imageMap);
     const quoteBuf = await buildQuotation(quotation, imageMap);
